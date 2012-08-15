@@ -222,6 +222,10 @@ static int fcgid_handler(request_rec * r)
 
     /* Build the command line */
     if (wrapper_conf) {
+        wrapper_conf = fixup_wrapper_info(wrapper_conf, r);
+        if (!wrapper_conf)
+            return HTTP_INTERNAL_SERVER_ERROR;
+
         if ((rv =
              default_build_command(&command, &argv, r, r->pool,
                                    &e_info)) != APR_SUCCESS) {

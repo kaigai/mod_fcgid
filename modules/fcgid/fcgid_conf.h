@@ -227,6 +227,9 @@ apr_array_header_t *get_pass_headers(request_rec * r);
 
 const char *set_wrapper_config(cmd_parms * cmd, void *dummy,
                                const char *wrapper, const char *extension, const char* virtual);
+
+fcgid_cmd_conf *fixup_wrapper_info(fcgid_cmd_conf *wrapper, request_rec *r);
+
 fcgid_cmd_conf *get_wrapper_info(const char *cgipath, request_rec * r);
 
 const char *set_authenticator_info(cmd_parms * cmd, void *config,

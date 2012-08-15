@@ -831,9 +831,6 @@ const char *set_wrapper_config(cmd_parms * cmd, void *dirconfig,
                                const char *extension,
                                const char *virtual)
 {
-    const char *path, *tmp;
-    apr_status_t rv;
-    apr_finfo_t finfo;
     fcgid_cmd_conf *wrapper = NULL;
     fcgid_dir_conf *config = (fcgid_dir_conf *) dirconfig;
 
@@ -853,33 +850,11 @@ const char *set_wrapper_config(cmd_parms * cmd, void *dirconfig,
             || ap_strchr_c(extension, '/') || ap_strchr_c(extension, '\\')))
         return "Invalid wrapper file extension";
 
-    /* Get wrapper path */
-    tmp = wrapper_cmdline;
-    path = ap_getword_white(cmd->temp_pool, &tmp);
-    if (path == NULL || *path == '\0')
-        return "Invalid wrapper config";
-
-    /* Fetch only required file details inode + device */
-    if ((rv = apr_stat(&finfo, path, APR_FINFO_IDENT,
-                       cmd->temp_pool)) != APR_SUCCESS) {
-        return missing_file_msg(cmd->pool, "Wrapper", path, rv);
-    }
-
     wrapper = apr_pcalloc(cmd->pool, sizeof(*wrapper));
 
-    if (strlen(path) >= FCGID_PATH_MAX) {
-        return "Executable path length exceeds compiled-in limit";
-    }
-    wrapper->cgipath = apr_pstrdup(cmd->pool, path);
-
-    if (strlen(wrapper_cmdline) >= FCGID_CMDLINE_MAX) {
-        return "Command line length exceeds compiled-in limit";
-    }
     wrapper->cmdline = apr_pstrdup(cmd->pool, wrapper_cmdline);
-
-    wrapper->inode = finfo.inode;
-    wrapper->deviceid = finfo.device;
-    wrapper->virtual = (virtual != NULL && !strcasecmp(virtual, WRAPPER_FLAG_VIRTUAL));
+    if (virtual != NULL && !strcasecmp(virtual, WRAPPER_FLAG_VIRTUAL))
+        wrapper->virtual = -1;
 
     if (extension == NULL)
         extension = DEFAULT_WRAPPER_KEY;
@@ -890,6 +865,118 @@ const char *set_wrapper_config(cmd_parms * cmd, void *dirconfig,
                  wrapper);
 
     return NULL;
+}
+
+static char *
+expand_cmdline(fcgid_cmd_conf *wrapper, request_rec *r)
+{
+    char       *cmdline;
+    char       *result;
+    char       *varname;
+    const char *vardatum;
+    int			c, ri, wi, len;
+
+    result  = alloca(FCGID_CMDLINE_MAX);
+    cmdline = alloca(strlen(wrapper->cmdline) + 1);
+    strcpy(cmdline, wrapper->cmdline);
+
+    ri = wi = 0;
+    do {
+        c = cmdline[ri++];
+        if (c == '%') {
+            if (cmdline[ri] == '(') {
+                varname = cmdline + (++ri);
+                while (isalnum(cmdline[ri]) || cmdline[ri] == '_')
+                    ri++;
+                c = cmdline[ri];
+                cmdline[ri] = '\0';
+
+                if (c != ')')
+                    goto out_invalid;
+
+                c = cmdline[++ri];
+            }
+            else {
+                varname = cmdline + ri;
+                while (isalnum(cmdline[ri]) || cmdline[ri] == '_')
+                    ri++;
+                c = cmdline[ri];
+                cmdline[ri] = '\0';
+            }
+
+            vardatum = apr_table_get(r->subprocess_env, varname);
+
+                ap_log_rerror(APLOG_MARK, APLOG_NOTICE, 0, r,
+                              "mod_fcgi: environ '%s' = '%s'",
+                              varname, vardatum);
+
+            if (vardatum && strlen(vardatum) > 0) {
+                len = strlen(vardatum);
+                if (wi + len >= FCGID_CMDLINE_MAX)
+                    goto out_too_long;
+                strcpy(result + wi, vardatum);
+                wi += len;
+            }
+        }
+        if (c == '\\')
+            c = cmdline[ri++];
+        result[wi++] = c;
+    } while (wi < FCGID_CMDLINE_MAX && c != '\0');
+
+    if (c == '\0') {
+        ap_log_rerror(APLOG_MARK, APLOG_NOTICE, 0, r,
+                      "mod_fcgi: cmdline '%s' => '%s'",
+                      wrapper->cmdline, result);
+        return apr_pstrdup(r->pool, result);
+    }
+
+ out_too_long:
+    ap_log_rerror(APLOG_MARK, APLOG_ERR, APR_ENAMETOOLONG, r,
+                  "mod_fcgid: command line length exceeds the limit: %s",
+                  wrapper->cmdline);
+    return NULL;
+
+ out_invalid:
+    ap_log_rerror(APLOG_MARK, APLOG_ERR, APR_ENAMETOOLONG, r,
+                  "mod_fcgid: command line contains invalid expression: '%s'",
+                  wrapper->cmdline);
+    return NULL;
+}
+
+fcgid_cmd_conf *fixup_wrapper_info(fcgid_cmd_conf *wrapper, request_rec *r)
+{
+    fcgid_cmd_conf *result;
+    apr_finfo_t	    finfo;
+    apr_status_t    rv;
+    const char     *cmdline;
+
+    cmdline = expand_cmdline(wrapper, r);
+    if (!cmdline || strlen(cmdline) >= FCGID_CMDLINE_MAX)
+        return NULL;
+
+    result = apr_pcalloc(r->pool, sizeof(*result));
+
+    result->cgipath = ap_getword_white(r->pool, &cmdline);
+    if (!result->cgipath || *result->cgipath == '\0') {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, APR_EINVAL, r,
+                      "mod_fcgid: invalid wrapper config");
+        return NULL;
+    }
+
+    rv = apr_stat(&finfo, result->cgipath, APR_FINFO_IDENT, r->pool);
+    if (rv != APR_SUCCESS) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
+                      "mod_fcgid: wrapper \"%s\" cannot be accessed",
+                      result->cgipath);
+        return NULL;
+    }
+
+    result->cmdline  = cmdline;
+    result->inode    = finfo.inode;
+    result->deviceid = finfo.device;
+    result->virtual  = wrapper->virtual;
+
+    return result;
 }
 
 fcgid_cmd_conf *get_wrapper_info(const char *cgipath, request_rec * r)
