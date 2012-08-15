@@ -891,9 +891,13 @@ expand_cmdline(fcgid_cmd_conf *wrapper, request_rec *r)
                 c = cmdline[ri];
                 cmdline[ri] = '\0';
 
-                if (c != ')')
-                    goto out_invalid;
-
+                if (c != ')') {
+                    ap_log_rerror(APLOG_MARK, APLOG_ERR, APR_ENAMETOOLONG, r,
+                                  "mod_fcgid: command line contains "
+                                  "invalid expression: '%s'",
+                                  wrapper->cmdline);
+                    return NULL;
+                }
                 c = cmdline[++ri];
             }
             else {
@@ -906,14 +910,12 @@ expand_cmdline(fcgid_cmd_conf *wrapper, request_rec *r)
 
             vardatum = apr_table_get(r->subprocess_env, varname);
 
-                ap_log_rerror(APLOG_MARK, APLOG_NOTICE, 0, r,
-                              "mod_fcgi: environ '%s' = '%s'",
-                              varname, vardatum);
-
             if (vardatum && strlen(vardatum) > 0) {
                 len = strlen(vardatum);
-                if (wi + len >= FCGID_CMDLINE_MAX)
-                    goto out_too_long;
+                if (wi + len >= FCGID_CMDLINE_MAX) {
+                    c = -1;
+                    break;
+                }
                 strcpy(result + wi, vardatum);
                 wi += len;
             }
@@ -924,22 +926,15 @@ expand_cmdline(fcgid_cmd_conf *wrapper, request_rec *r)
     } while (wi < FCGID_CMDLINE_MAX && c != '\0');
 
     if (c == '\0') {
-        ap_log_rerror(APLOG_MARK, APLOG_NOTICE, 0, r,
-                      "mod_fcgi: cmdline '%s' => '%s'",
-                      wrapper->cmdline, result);
-        return apr_pstrdup(r->pool, result);
+      ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r,
+		    "mod_fcgid: %s original: '%s' => expanded: '%s'",
+		    __FUNCTION__, wrapper->cmdline, result);
+      return apr_pstrdup(r->pool, result);
     }
 
- out_too_long:
     ap_log_rerror(APLOG_MARK, APLOG_ERR, APR_ENAMETOOLONG, r,
-                  "mod_fcgid: command line length exceeds the limit: %s",
-                  wrapper->cmdline);
-    return NULL;
-
- out_invalid:
-    ap_log_rerror(APLOG_MARK, APLOG_ERR, APR_ENAMETOOLONG, r,
-                  "mod_fcgid: command line contains invalid expression: '%s'",
-                  wrapper->cmdline);
+		  "mod_fcgid: command line length exceeds the limit: '%s'",
+		  wrapper->cmdline);
     return NULL;
 }
 
