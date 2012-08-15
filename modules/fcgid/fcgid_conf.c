@@ -949,14 +949,15 @@ fcgid_cmd_conf *fixup_wrapper_info(fcgid_cmd_conf *wrapper, request_rec *r)
     apr_finfo_t	    finfo;
     apr_status_t    rv;
     const char     *cmdline;
+    const char     *temp;
 
-    cmdline = expand_cmdline(wrapper, r);
+    temp = cmdline = expand_cmdline(wrapper, r);
     if (!cmdline || strlen(cmdline) >= FCGID_CMDLINE_MAX)
         return NULL;
 
     result = apr_pcalloc(r->pool, sizeof(*result));
 
-    result->cgipath = ap_getword_white(r->pool, &cmdline);
+    result->cgipath = ap_getword_white(r->pool, &temp);
     if (!result->cgipath || *result->cgipath == '\0') {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, APR_EINVAL, r,
                       "mod_fcgid: invalid wrapper config");
@@ -970,7 +971,6 @@ fcgid_cmd_conf *fixup_wrapper_info(fcgid_cmd_conf *wrapper, request_rec *r)
                       result->cgipath);
         return NULL;
     }
-
     result->cmdline  = cmdline;
     result->inode    = finfo.inode;
     result->deviceid = finfo.device;
