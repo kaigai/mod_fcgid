@@ -58,6 +58,7 @@
 #define DEFAULT_MAX_REQUEST_LEN (1024*128)
 #define DEFAULT_MAX_MEM_REQUEST_LEN (1024*64)
 #define DEFAULT_WRAPPER_KEY "ALL"
+#define DOCUMENT_WRAPPER_KEY "DOC"
 #define WRAPPER_FLAG_VIRTUAL "virtual"
 
 void *create_fcgid_server_config(apr_pool_t * p, server_rec * s)
@@ -867,6 +868,29 @@ const char *set_wrapper_config(cmd_parms * cmd, void *dirconfig,
     return NULL;
 }
 
+const char *set_document_wrapper_config(cmd_parms * cmd, void *dirconfig,
+                                        const char *wrapper_cmdline,
+                                        const char *virtual)
+{
+    fcgid_cmd_conf *wrapper = NULL;
+    fcgid_dir_conf *config = (fcgid_dir_conf *) dirconfig;
+
+    wrapper = apr_pcalloc(cmd->pool, sizeof(*wrapper));
+    wrapper->cmdline = apr_pstrdup(cmd->pool, wrapper_cmdline);
+    if (virtual != NULL) {
+        if (strcasecmp(virtual, WRAPPER_FLAG_VIRTUAL))
+            return "Invalid wrapper flag";
+        wrapper->virtual = -1;
+    }
+
+    /* Add the node with DOCUMENT_WRAPPER_KEY */
+    apr_hash_set(config->wrapper_info_hash,
+                 DOCUMENT_WRAPPER_KEY,
+                 sizeof(DOCUMENT_WRAPPER_KEY) - 1,
+                 wrapper);
+    return NULL;
+}
+
 static char *
 expand_cmdline(fcgid_cmd_conf *wrapper, request_rec *r)
 {
@@ -998,6 +1022,15 @@ fcgid_cmd_conf *get_wrapper_info(const char *cgipath, request_rec * r)
     }
 
     return NULL;
+}
+
+fcgid_cmd_conf *get_document_wrapper_info(request_rec * r)
+{
+    fcgid_dir_conf *config = ap_get_module_config(r->per_dir_config,
+                                                  &fcgid_module);
+    return apr_hash_get(config->wrapper_info_hash,
+                        DOCUMENT_WRAPPER_KEY,
+                        sizeof(DOCUMENT_WRAPPER_KEY) - 1);
 }
 
 static int set_cmd_envvars(fcgid_cmd_env *cmdenv, apr_table_t *envvars)

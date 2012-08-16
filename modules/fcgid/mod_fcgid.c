@@ -179,20 +179,13 @@ static void fcgid_add_cgi_vars(request_rec * r)
     }
 }
 
-static int fcgid_handler(request_rec * r)
+static int fcgid_exec_handler(request_rec * r, fcgid_cmd_conf *wrapper_conf)
 {
     cgi_exec_info_t e_info;
     const char *command;
     const char **argv;
     apr_status_t rv;
     int http_retcode;
-    fcgid_cmd_conf *wrapper_conf;
-
-    if (strcmp(r->handler, "fcgid-script"))
-        return DECLINED;
-
-    if (!(ap_allow_options(r) & OPT_EXECCGI) && !is_scriptaliased(r))
-        return HTTP_FORBIDDEN;
 
     if ((r->used_path_info == AP_REQ_REJECT_PATH_INFO) &&
         r->path_info && *r->path_info)
@@ -208,8 +201,6 @@ static int fcgid_handler(request_rec * r)
     e_info.bb = NULL;
     e_info.ctx = NULL;
     e_info.next = NULL;
-
-    wrapper_conf = get_wrapper_info(r->filename, r);
 
     /* Check for existence of requested file, unless we use a virtual wrapper. */
     if (wrapper_conf == NULL || !wrapper_conf->virtual) {
@@ -293,6 +284,28 @@ static int fcgid_handler(request_rec * r)
 
     http_retcode = bridge_request(r, FCGI_RESPONDER, wrapper_conf);
     return (http_retcode == HTTP_OK ? OK : http_retcode);
+}
+
+static int fcgid_handler(request_rec * r)
+{
+    if (strcmp(r->handler, "fcgid-script"))
+        return DECLINED;
+
+    if (!(ap_allow_options(r) & OPT_EXECCGI) && !is_scriptaliased(r))
+        return HTTP_FORBIDDEN;
+
+    return fcgid_exec_handler(r, get_wrapper_info(r->filename, r));
+}
+
+static int fcgid_document_handler(request_rec *r)
+{
+    fcgid_cmd_conf *wrapper_conf;
+
+    wrapper_conf = get_document_wrapper_info(r);
+    if (!wrapper_conf)
+        return DECLINED;
+
+    return fcgid_exec_handler(r, wrapper_conf);
 }
 
 static int fcgidsort(fcgid_procnode **e1, fcgid_procnode **e2)
@@ -817,6 +830,9 @@ static const command_rec fcgid_cmds[] = {
     AP_INIT_TAKE123("FcgidWrapper", set_wrapper_config, NULL,
                     RSRC_CONF | ACCESS_CONF | OR_FILEINFO,
                     "The CGI wrapper file an optional URL suffix and an optional flag"),
+    AP_INIT_TAKE12("FcgidDocumentWrapper", set_document_wrapper_config, NULL,
+		   RSRC_CONF | ACCESS_CONF | OR_FILEINFO,
+		   "The CGI wrapper for static contents and an optional flag"),
     AP_INIT_TAKE1("FcgidZombieScanInterval", set_zombie_scan_interval, NULL,
                   RSRC_CONF,
                   "scan interval for zombie process"),
@@ -951,6 +967,7 @@ static void register_hooks(apr_pool_t * p)
     ap_hook_post_config(fcgid_init, NULL, NULL, APR_HOOK_MIDDLE);
     ap_hook_child_init(initialize_child, NULL, NULL, APR_HOOK_MIDDLE);
     ap_hook_handler(fcgid_handler, NULL, NULL, APR_HOOK_MIDDLE);
+    ap_hook_handler(fcgid_document_handler, NULL, NULL, APR_HOOK_LAST);
     ap_hook_check_user_id(mod_fcgid_authenticator, NULL, NULL,
                           APR_HOOK_MIDDLE);
     ap_hook_auth_checker(mod_fcgid_authorizer, NULL, NULL,
